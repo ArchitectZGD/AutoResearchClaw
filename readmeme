@@ -1,0 +1,70 @@
+  必须理解的部分（按重要性排序）
+
+  1. 流水线骨架 — researchclaw/pipeline/
+  - stages.py — 定义 23 个 Stage 枚举、执行顺序 STAGE_SEQUENCE、门禁 GATE_STAGES、回滚规则 GATE_ROLLBACK、决策回滚
+  DECISION_ROLLBACK、状态机 TRANSITION_MAP。整个 Claw 工作流的"目录"都在这个文件里。
+  - contracts.py — 每个 Stage 的 input_files/output_files/dod/error_code。改工作流必改这里，否则产物会错位。
+  - runner.py — 驱动循环：按顺序调 executor，做 checkpoint、lesson 抽取、KB 写入、HITL 拦截。
+  - executor.py + stage_impls/_*.py — 真正的 Stage
+  逻辑（topic/literature/synthesis/experiment_design/code_generation/execution/analysis/paper_writing/review_publish）。每个
+  _xxx.py 对应一组阶段。
+
+  2. 配置层 — researchclaw/config.py + config.arc.yaml
+  - RCConfig 是所有模块共享的数据类。配置键与 Stage 行为是松耦合的（比如 security.hitl_required_stages: [5,9,20] 是靠编号硬引用
+  Stage 的），改工作流时要同步。
+
+  3. 适配层 — researchclaw/adapters.py + researchclaw/llm/
+  - adapters.py：Cron/Message/Memory/Sessions/WebFetch/Browser 的 Protocol + 录制 stub。与 OpenClaw bridge 对接。
+  - llm/ 里四个文件 (client.py、anthropic_adapter.py、gemini_adapter.py、acp_client.py) 就是 LLM provider 抽象。要换模型走
+  create_llm_client。
+
+  4. HITL（可选但影响深远）— researchclaw/hitl/
+  门禁、co-pilot、SmartPause、ALHF 学习都在这里，通过 stage 编号挂钩到流水线。如果你改动 Stage 数量/编号，HITL presets 与
+  hitl_required_stages 都要重映射。
+
+  5. CLI 入口 — researchclaw/cli.py + __main__.py
+  理解 run/setup/init/--resume/--from-stage 等参数怎么落到 runner。
+
+  ---
+  重新配置工作流需要重写的部分
+
+  如果"重新配置"=重新设计阶段序列/阶段职责，不只是调参数：
+
+  ┌──────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────┐
+  │                   必须重写                   │                                   原因                                   │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pipeline/stages.py                           │ 新的 Stage 枚举、序列、GATE、rollback 目标、PHASE_MAP                    │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pipeline/contracts.py                        │ 每个新阶段的输入/输出文件契约和 DoD                                      │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pipeline/stage_impls/_*.py                   │ 新阶段的业务逻辑；旧阶段可删可拆                                         │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pipeline/executor.py 中 execute_stage 的分派 │ 将 Stage → impl 的映射补齐                                               │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pipeline/runner.py（局部）                   │ _build_pipeline_summary、checkpoint、decision rollback 的 Stage 常量引用 │
+  ├──────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ tests/ 中流水线/契约用例                     │ 用 2699 个测试当回归网                                                   │
+  └──────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────┘
+
+  只要改动，要联动检查（不一定重写）：
+  - config.py — 若新增配置字段（如新阶段的参数）
+  - security.hitl_required_stages / metaclaw_bridge.prm.gate_stages — 硬编码的 Stage 编号
+  - hitl/presets.py 和 hitl/intervention.py — 按 stage 的策略映射
+  - knowledge/base.py — write_stage_to_kb 的写入目录约定
+  - prompts.default.yaml — 每阶段对应一段 prompt，重命名阶段要同步
+  - skills/matcher.py — skill 是按 stage 匹配注入的
+
+  可直接复用（与工作流无关）：
+  - researchclaw/llm/、adapters.py、hardware.py、experiment/（sandbox/docker/ssh 执行器）、literature/（OpenAlex/S2/arXiv
+  客户端）、writing_guide.py、overleaf/、figure_agent、opencode_bridge — 这些是工具层，任何工作流都能复用。
+
+  ---
+  建议的上手顺序
+
+  1. 读 stages.py + contracts.py（~1 小时）搞清阶段拓扑。
+  2. 跟一次 runner.py → executor.py → 任一 stage_impls/_topic.py 的调用链，理解 Stage 的输入/输出约定。
+  3. 读 config.py 的 RCConfig 和 config.arc.yaml，明白配置怎么落到每一步。
+  4. 跑一次 researchclaw run --topic ...，观察 run 目录里产物的命名与 contracts 的对应。
+  5. 这时再动 stages.py。
+
+  要不要我展开其中某一块（比如 executor 调度、HITL gate 机制、或者 LLM adapter 接口）的细节？
